@@ -2,24 +2,28 @@ package main
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"log"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/leifarriens/gpu-leaf/internal/gpu"
+	"github.com/leifarriens/gpu-leaf/internal/utils"
 )
 
-type GPUStats struct {
-	Temperature float64
-	PowerDraw   float64
-	Utilization float64
-	PowerLimit  float64
-}
-
 func main() {
-	ticker := time.NewTicker(500 * time.Millisecond)
+	gpuInfo, err := gpu.GetPowerInfo()
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("GPU Info: %+v\n", gpuInfo)
+
+	ticker := time.NewTicker(100 * time.Millisecond)
 
 	logFile, err := os.OpenFile("gpu_info.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -31,13 +35,13 @@ func main() {
 	logger := log.New(logWriter, "", log.LstdFlags)
 
 	for range ticker.C {
-		if err := logGPUInfo(logger); err != nil {
-			logger.Printf("Error logging GPU info: %v", err)
+		if err := logGPUStats(logger, gpuInfo); err != nil {
+			logger.Printf("Error logging GPU stats: %v", err)
 		}
 	}
 }
 
-func logGPUInfo(logger *log.Logger) error {
+func logGPUStats(logger *log.Logger, gpuPowerInfo *gpu.GPUPowerInfo) error {
 	cmd := exec.Command("nvidia-smi", "--query-gpu=temperature.gpu,power.draw,utilization.gpu,power.limit", "--format=csv,noheader,nounits")
 
 	stdout, err := cmd.StdoutPipe()
@@ -50,16 +54,17 @@ func logGPUInfo(logger *log.Logger) error {
 	}
 
 	scanner := bufio.NewScanner(stdout)
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		fields := strings.Split(line, ",")
 		if len(fields) == 4 {
-			temperature := parseFloat(fields[0])
-			powerDraw := parseFloat(fields[1])
-			gpuUtil := parseFloat(fields[2])
-			powerLimit := parseFloat(fields[3])
+			temperature := utils.ParseFloat(fields[0])
+			powerDraw := utils.ParseFloat(fields[1])
+			gpuUtil := utils.ParseFloat(fields[2])
+			powerLimit := utils.ParseFloat(fields[3])
 
-			gpuStats := GPUStats{
+			gpuStats := gpu.GPUStats{
 				Temperature: temperature,
 				PowerDraw:   powerDraw,
 				Utilization: gpuUtil,
@@ -67,6 +72,7 @@ func logGPUInfo(logger *log.Logger) error {
 			}
 
 			logger.Printf("GPU Info: %+v", gpuStats)
+			gpu.Leaf(gpuPowerInfo, &gpuStats)
 		}
 	}
 
@@ -75,12 +81,4 @@ func logGPUInfo(logger *log.Logger) error {
 	}
 
 	return nil
-}
-
-func parseFloat(s string) float64 {
-	f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
-	if err != nil {
-		log.Printf("Error parsing float: %v", err)
-	}
-	return f
 }
