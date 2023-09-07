@@ -1,6 +1,7 @@
 package gpu
 
 import (
+	"bufio"
 	"fmt"
 	"log"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 )
 
 type GPUPowerInfo struct {
+	IsPowerManageable bool
 	MinPowerLimit     float64
 	MaxPowerLimit     float64
 	DefaultPowerLimit float64
@@ -30,7 +32,7 @@ type GPUStats struct {
 }
 
 func GetPowerInfo() (*GPUPowerInfo, error) {
-	cmd := exec.Command("nvidia-smi", "--query-gpu=power.min_limit,power.max_limit,power.default_limit", "--format=csv,noheader,nounits")
+	cmd := exec.Command("nvidia-smi", "--query-gpu=power.management,power.min_limit,power.max_limit,power.default_limit", "--format=csv,noheader,nounits")
 
 	stdout, err := cmd.Output()
 
@@ -42,23 +44,69 @@ func GetPowerInfo() (*GPUPowerInfo, error) {
 
 	fields := strings.Split(output, ",")
 
-	if len(fields) != 3 {
-		return nil, fmt.Errorf("unexpected output format")
+	if len(fields) != 4 {
+		return nil, fmt.Errorf("query gpu unexpected output format")
 	}
 
-	minPowerLimit := utils.ParseFloat(fields[0])
+	isPowerManageable := fields[0] == "Supported" || fields[0] == "Enabled"
 
-	maxPowerLimit := utils.ParseFloat(fields[1])
+	minPowerLimit := utils.ParseFloat(fields[1])
 
-	defaultPowerLimit := utils.ParseFloat(fields[2])
+	maxPowerLimit := utils.ParseFloat(fields[2])
+
+	defaultPowerLimit := utils.ParseFloat(fields[3])
 
 	gpuInfo := &GPUPowerInfo{
+		IsPowerManageable: isPowerManageable,
 		MinPowerLimit:     minPowerLimit,
 		MaxPowerLimit:     maxPowerLimit,
 		DefaultPowerLimit: defaultPowerLimit,
 	}
 
 	return gpuInfo, nil
+}
+
+func WatchStats(gpuConfig *GPUConfig, logger *log.Logger, callback func(*GPUConfig, *GPUStats)) error {
+	cmd := exec.Command("nvidia-smi", "--query-gpu=temperature.gpu,power.draw,utilization.gpu,power.limit", "--format=csv,noheader,nounits")
+
+	stdout, err := cmd.StdoutPipe()
+
+	if err != nil {
+		return err
+	}
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	scanner := bufio.NewScanner(stdout)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		fields := strings.Split(line, ",")
+		if len(fields) == 4 {
+			temperature := utils.ParseFloat(fields[0])
+			powerDraw := utils.ParseFloat(fields[1])
+			gpuUtil := int(utils.ParseFloat(fields[2]))
+			powerLimit := utils.ParseFloat(fields[3])
+
+			gpuStats := GPUStats{
+				Temperature: temperature,
+				PowerDraw:   powerDraw,
+				Utilization: gpuUtil,
+				PowerLimit:  powerLimit,
+			}
+
+			logger.Printf("GPU Info: %+v", gpuStats)
+			callback(gpuConfig, &gpuStats)
+		}
+	}
+
+	if err := cmd.Wait(); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func Leaf(gpuConfig *GPUConfig, gpuStats *GPUStats) {
