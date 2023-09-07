@@ -13,3 +13,11 @@ func ParseFloat(s string) float64 {
 	}
 	return f
 }
+
+func ParseInt(s string) int {
+	f, err := strconv.Atoi(s)
+	if err != nil {
+		log.Printf("Error parsing int: %v", err)
+	}
+	return f
+}

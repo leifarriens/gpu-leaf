@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -15,33 +16,56 @@ import (
 )
 
 func main() {
-	gpuInfo, err := gpu.GetPowerInfo()
+	gpuPowerInfo, err := gpu.GetPowerInfo()
+
+	// this flag decides if PowerLevel will go above DefaultPowerLevel up to MaxPowerLevel
+	shouldOc := flag.Bool("oc", false, "Should gpu-leave raise power level above 100%")
+	threshold := flag.Int("t", 95, "Utilization threshold")
+
+	flag.Parse()
 
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("GPU Info: %+v\n", gpuInfo)
+	fmt.Printf("GPU Info: %+v\n", gpuPowerInfo)
 
-	ticker := time.NewTicker(100 * time.Millisecond)
+	var maxPowerLimit float64
+
+	if *shouldOc {
+		maxPowerLimit = gpuPowerInfo.MaxPowerLimit
+	} else {
+		maxPowerLimit = gpuPowerInfo.DefaultPowerLimit
+	}
+
+	gpuConfig := gpu.GPUConfig{
+		MinPowerLimit: gpuPowerInfo.MinPowerLimit,
+		MaxPowerLimit: maxPowerLimit,
+		Threshold:     *threshold,
+	}
+
+	ticker := time.NewTicker(1000 * time.Millisecond)
 
 	logFile, err := os.OpenFile("gpu_info.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+
 	if err != nil {
 		log.Fatalf("Error opening log file: %v", err)
 	}
+
 	defer logFile.Close()
 
 	logWriter := io.MultiWriter(logFile, os.Stdout)
 	logger := log.New(logWriter, "", log.LstdFlags)
 
 	for range ticker.C {
-		if err := logGPUStats(logger, gpuInfo); err != nil {
-			logger.Printf("Error logging GPU stats: %v", err)
+
+		if err := logGPUStats(logger, &gpuConfig); err != nil {
+			log.Fatalf("Error receiving GPU stats: %v", err)
 		}
 	}
 }
 
-func logGPUStats(logger *log.Logger, gpuPowerInfo *gpu.GPUPowerInfo) error {
+func logGPUStats(logger *log.Logger, gpuConfig *gpu.GPUConfig) error {
 	cmd := exec.Command("nvidia-smi", "--query-gpu=temperature.gpu,power.draw,utilization.gpu,power.limit", "--format=csv,noheader,nounits")
 
 	stdout, err := cmd.StdoutPipe()
@@ -61,7 +85,7 @@ func logGPUStats(logger *log.Logger, gpuPowerInfo *gpu.GPUPowerInfo) error {
 		if len(fields) == 4 {
 			temperature := utils.ParseFloat(fields[0])
 			powerDraw := utils.ParseFloat(fields[1])
-			gpuUtil := utils.ParseFloat(fields[2])
+			gpuUtil := int(utils.ParseFloat(fields[2]))
 			powerLimit := utils.ParseFloat(fields[3])
 
 			gpuStats := gpu.GPUStats{
@@ -72,7 +96,7 @@ func logGPUStats(logger *log.Logger, gpuPowerInfo *gpu.GPUPowerInfo) error {
 			}
 
 			logger.Printf("GPU Info: %+v", gpuStats)
-			gpu.Leaf(gpuPowerInfo, &gpuStats)
+			gpu.Leaf(gpuConfig, &gpuStats)
 		}
 	}
 

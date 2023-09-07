@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/leifarriens/gpu-leaf/internal/utils"
@@ -15,10 +16,16 @@ type GPUPowerInfo struct {
 	DefaultPowerLimit float64
 }
 
+type GPUConfig struct {
+	MinPowerLimit float64
+	MaxPowerLimit float64
+	Threshold     int
+}
+
 type GPUStats struct {
 	Temperature float64
 	PowerDraw   float64
-	Utilization float64
+	Utilization int
 	PowerLimit  float64
 }
 
@@ -54,25 +61,34 @@ func GetPowerInfo() (*GPUPowerInfo, error) {
 	return gpuInfo, nil
 }
 
-func Leaf(gpuPowerInfo *GPUPowerInfo, gpuStats *GPUStats) {
-	if gpuStats.PowerLimit > gpuPowerInfo.MinPowerLimit && gpuStats.PowerLimit <= gpuPowerInfo.MaxPowerLimit {
-		if gpuStats.Utilization < 95 {
-			s := fmt.Sprintf("%f", gpuStats.PowerLimit-1)
-			cmd := exec.Command("nvidia-smi", "-i", "0", "-pl", s)
+func Leaf(gpuConfig *GPUConfig, gpuStats *GPUStats) {
+	baseFactor := gpuConfig.MaxPowerLimit / 10
 
-			if err := cmd.Run(); err != nil {
-				log.Fatal(err)
-			}
-		}
+	var newValue float64
 
-		if gpuStats.Utilization > 95 {
-			s := fmt.Sprintf("%f", gpuStats.PowerLimit+1)
-			cmd := exec.Command("nvidia-smi", "-i", "0", "-pl", s)
+	if gpuStats.Utilization < gpuConfig.Threshold {
+		utilDiff := (100 - float64(gpuStats.Utilization)) / 100
+		newValue = gpuStats.PowerLimit - (baseFactor * utilDiff)
+	}
 
-			if err := cmd.Run(); err != nil {
-				log.Fatal(err)
-			}
-		}
+	if gpuStats.Utilization >= gpuConfig.Threshold {
+		newValue = gpuStats.PowerLimit + (baseFactor * (float64(gpuStats.Utilization) / 100))
+	}
 
+	if newValue > gpuConfig.MinPowerLimit && newValue < gpuConfig.MaxPowerLimit {
+		setPowerLimit(newValue)
+	} else {
+		fmt.Println(newValue)
+	}
+}
+
+func setPowerLimit(limit float64) {
+	// s := fmt.Sprintf("%", limit)
+	s := strconv.Itoa(int(limit))
+
+	cmd := exec.Command("nvidia-smi", "-i", "0", "-pl", s)
+
+	if err := cmd.Run(); err != nil {
+		log.Fatal(err)
 	}
 }
