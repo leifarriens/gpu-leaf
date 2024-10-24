@@ -22,3 +22,6 @@ go.work
 
 # Logfiles
 *.log
+
+# Build directory
+bin/
