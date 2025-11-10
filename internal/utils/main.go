@@ -17,7 +17,7 @@ func ParseFloat(s string) float64 {
 }
 
 func ParseInt(s string) int {
-	f, err := strconv.Atoi(s)
+	f, err := strconv.Atoi(strings.TrimSpace(s))
 	if err != nil {
 		log.Printf("Error parsing int: %v", err)
 	}
@@ -25,12 +25,19 @@ func ParseInt(s string) int {
 }
 
 func CreateLogger(stdout bool, file bool) (*log.Logger, *os.File) {
+	if file {
+		return CreateLoggerWithPath(stdout, "gpu_leaf.log")
+	}
+	return CreateLoggerWithPath(stdout, "")
+}
+
+func CreateLoggerWithPath(stdout bool, filePath string) (*log.Logger, *os.File) {
 	var logFile *os.File
 
 	var writers []io.Writer
 
-	if file {
-		logFile, err := os.OpenFile("gpu_leaf.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if filePath != "" {
+		logFile, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 
 		if err != nil {
 			log.Fatalf("Error opening log file: %v", err)
@@ -40,6 +47,10 @@ func CreateLogger(stdout bool, file bool) (*log.Logger, *os.File) {
 	}
 
 	if stdout {
+		writers = append(writers, os.Stdout)
+	}
+
+	if len(writers) == 0 {
 		writers = append(writers, os.Stdout)
 	}
 

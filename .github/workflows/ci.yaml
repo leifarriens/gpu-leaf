@@ -16,5 +16,10 @@ jobs:
         with:
           go-version: '1.19'
 
+      - name: Vet
+        run: go vet ./...
+
       - name: Build
-        run: go build -v ./cmd/gpuleaf/main.go
+        run: |
+          VERSION=$(git describe --tags --always || echo dev)
+          go build -ldflags "-X github.com/leifarriens/gpu-leaf/internal/version.Version=$VERSION" -v ./cmd/gpuleaf

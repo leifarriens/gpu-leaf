@@ -2,6 +2,7 @@ package gpu
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"log"
 	"os/exec"
@@ -22,6 +23,8 @@ type GPUConfig struct {
 	MinPowerLimit float64
 	MaxPowerLimit float64
 	Threshold     int
+	GPUIndex      int
+	DryRun        bool
 }
 
 type GPUStats struct {
@@ -31,8 +34,8 @@ type GPUStats struct {
 	PowerLimit  float64
 }
 
-func GetPowerInfo() (*GPUPowerInfo, error) {
-	cmd := exec.Command("nvidia-smi", "--query-gpu=power.management,power.min_limit,power.max_limit,power.default_limit", "--format=csv,noheader,nounits")
+func GetPowerInfo(index int) (*GPUPowerInfo, error) {
+	cmd := exec.Command("nvidia-smi", "-i", strconv.Itoa(index), "--query-gpu=power.management,power.min_limit,power.max_limit,power.default_limit", "--format=csv,noheader,nounits")
 
 	stdout, err := cmd.Output()
 
@@ -48,7 +51,7 @@ func GetPowerInfo() (*GPUPowerInfo, error) {
 		return nil, fmt.Errorf("query gpu unexpected output format")
 	}
 
-	isPowerManageable := fields[0] == "Supported" || fields[0] == "Enabled"
+	isPowerManageable := strings.EqualFold(strings.TrimSpace(fields[0]), "Supported") || strings.EqualFold(strings.TrimSpace(fields[0]), "Enabled")
 
 	minPowerLimit := utils.ParseFloat(fields[1])
 
@@ -66,8 +69,8 @@ func GetPowerInfo() (*GPUPowerInfo, error) {
 	return gpuInfo, nil
 }
 
-func WatchStats(gpuConfig *GPUConfig, logger *log.Logger, callback func(*GPUConfig, *GPUStats)) error {
-	cmd := exec.Command("nvidia-smi", "--query-gpu=temperature.gpu,power.draw,utilization.gpu,power.limit", "--format=csv,noheader,nounits")
+func WatchStats(ctx context.Context, gpuConfig *GPUConfig, logger *log.Logger, callback func(*GPUConfig, *GPUStats, *log.Logger)) error {
+	cmd := exec.CommandContext(ctx, "nvidia-smi", "-i", strconv.Itoa(gpuConfig.GPUIndex), "--query-gpu=temperature.gpu,power.draw,utilization.gpu,power.limit", "--format=csv,noheader,nounits")
 
 	stdout, err := cmd.StdoutPipe()
 
@@ -97,8 +100,8 @@ func WatchStats(gpuConfig *GPUConfig, logger *log.Logger, callback func(*GPUConf
 				PowerLimit:  powerLimit,
 			}
 
-			logger.Printf("GPU Info: %+v", gpuStats)
-			callback(gpuConfig, &gpuStats)
+			logger.Printf("GPU[%d] Stats: %+v", gpuConfig.GPUIndex, gpuStats)
+			callback(gpuConfig, &gpuStats, logger)
 		}
 	}
 
@@ -109,7 +112,7 @@ func WatchStats(gpuConfig *GPUConfig, logger *log.Logger, callback func(*GPUConf
 	return nil
 }
 
-func Leaf(gpuConfig *GPUConfig, gpuStats *GPUStats) {
+func Leaf(gpuConfig *GPUConfig, gpuStats *GPUStats, logger *log.Logger) {
 	baseFactor := gpuConfig.MaxPowerLimit / 10
 
 	var newValue float64
@@ -123,20 +126,36 @@ func Leaf(gpuConfig *GPUConfig, gpuStats *GPUStats) {
 		newValue = gpuStats.PowerLimit + (baseFactor * (float64(gpuStats.Utilization) / 100))
 	}
 
-	if newValue > gpuConfig.MinPowerLimit && newValue < gpuConfig.MaxPowerLimit {
-		setPowerLimit(newValue)
+	if newValue < gpuConfig.MinPowerLimit {
+		newValue = gpuConfig.MinPowerLimit
+	}
+	if newValue > gpuConfig.MaxPowerLimit {
+		newValue = gpuConfig.MaxPowerLimit
+	}
+
+	target := float64(int(newValue + 0.5))
+
+	if gpuStats.PowerLimit == target {
+		return
+	}
+
+	if gpuConfig.DryRun {
+		logger.Printf("[dry-run] Would set GPU[%d] power limit to %.0f W (min=%.0f, max=%.0f)", gpuConfig.GPUIndex, target, gpuConfig.MinPowerLimit, gpuConfig.MaxPowerLimit)
+		return
+	}
+
+	if err := setPowerLimit(target, gpuConfig.GPUIndex); err != nil {
+		logger.Printf("Failed to set power limit: %v", err)
 	} else {
-		fmt.Println(newValue)
+		logger.Printf("Set GPU[%d] power limit to %.0f W", gpuConfig.GPUIndex, target)
 	}
 }
 
-func setPowerLimit(limit float64) {
-	// s := fmt.Sprintf("%", limit)
+func setPowerLimit(limit float64, index int) error {
 	s := strconv.Itoa(int(limit))
-
-	cmd := exec.Command("nvidia-smi", "-i", "0", "-pl", s)
-
+	cmd := exec.Command("nvidia-smi", "-i", strconv.Itoa(index), "-pl", s)
 	if err := cmd.Run(); err != nil {
-		log.Fatal(err)
+		return err
 	}
+	return nil
 }
